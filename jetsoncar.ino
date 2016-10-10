@@ -17,6 +17,7 @@
 #endif
 
 #include <Servo.h> 
+#include <MsTimer2.h>
 #define USB_USBCON
 #include <ros.h>
 #include <std_msgs/UInt16.h>
@@ -25,8 +26,21 @@
 #include <std_msgs/Empty.h>
 #include <geometry_msgs/Twist.h>
 
+// Wcheel Encoder
+#define ECA 2   // D2   
+#define ECB 3   // D3 
+#define inputEc(x) digitalRead(x)   //  
+byte curDat;  
+byte befDat = 0;  
+byte rotDir = 0;  
+int Count = 0;  
+byte inputMatch;  
+byte matchCnt;    
+byte rotPat = 0;  
+
+// ROS
 ros::NodeHandle  nodeHandle;
-// These are general bounds for the steering servo and the
+
 // TRAXXAS Electronic Speed Controller (ESC)
 const int minSteering = 30 ;
 const int maxSteering = 150 ;
@@ -35,18 +49,36 @@ const int maxThrottle = 150 ;
 const float steeringScale = 0.3;
 const float steeringOffset = 0.5;
 const float electronicSpeedScale = 0.1;
-const float electronicSpeedOffset = 0.51;
-
+const float electronicSpeedOffset = 0.48;
 Servo steeringServo;
 Servo electronicSpeedController ;  // The ESC on the TRAXXAS works like a Servo
 
+
+// For DEBUG
 std_msgs::Int32 str_msg;
 ros::Publisher chatter("chatter", &str_msg); 
+std_msgs::Int32 wheel_encode_count_msg;
+ros::Publisher wheel_encode_counter("wheel_encode_count", &wheel_encode_count_msg); 
 
 // Arduino 'map' funtion for floating point
 double fmap (double toMap, double in_min, double in_max, double out_min, double out_max) {
   return (toMap - in_min) * (out_max - out_min) / (in_max - in_min) + out_min;
 }
+
+signed char checkEnc(byte dat) {  
+  byte pat,i,j;  
+  
+  rotPat <<= 2;  
+  rotPat |= (dat & 0x03);  
+  
+  if(rotPat == 0x4B) {        // +パターン  
+    return 1;  
+  } else if(rotPat == 0x87) {     // -パターン  
+    return -1;  
+  } else {  
+    return 0;  
+  }  
+}  
 
 void driveCallback ( const geometry_msgs::Twist&  twistMsg )
 {
@@ -87,28 +119,78 @@ void driveCallback ( const geometry_msgs::Twist&  twistMsg )
  
 }
 
-ros::Subscriber<geometry_msgs::Twist> driveSubscriber("/jetsoncar_teleop_joystick/cmd_vel", &driveCallback) ;
+ros::Subscriber<geometry_msgs::Twist> driveSubscriber("/cmd_vel", &driveCallback) ;
+
+void wec_publish () {
+   wheel_encode_counter.publish( &wheel_encode_count_msg );
+   Count = 0;
+}
 
 void setup(){
   pinMode(13, OUTPUT);
-  Serial.begin(115200) ;
+  Serial.begin(57600) ;
+  
+  // ROS
   nodeHandle.initNode();
-  // This can be useful for debugging purposes
-  nodeHandle.advertise(chatter);
-  // Subscribe to the steering and throttle messages
-  nodeHandle.subscribe(driveSubscriber) ;
-  // Attach the servos to actual pins
+  nodeHandle.advertise(chatter);  // This can be useful for debugging purposes
+  nodeHandle.subscribe(driveSubscriber) ;  // Subscribe to the steering and throttle messages
+
+  // Wheel Encoder
+  pinMode(ECA, INPUT);  
+  pinMode(ECB, INPUT);  
+  curDat = 0;  
+  if(inputEc(ECA)) {  
+    befDat |= 2;  
+  }  
+  if(inputEc(ECB)) {  
+    befDat |= 1;  
+  }
+  MsTimer2::set(100, wec_publish); // publish wheel encode count
+  MsTimer2::start();
+  
+  // TRAXXAS Electronic Speed Controller (ESC)
   steeringServo.attach(9); // Steering servo is attached to pin 9
   electronicSpeedController.attach(10); // ESC is on pin 10
   // Initialize Steering and ESC setting
   // Steering centered is 90, throttle at neutral is 90
   steeringServo.write(90) ;
   electronicSpeedController.write(90) ;
+  
   delay(1000) ;
   
 }
 
 void loop(){
   nodeHandle.spinOnce();
-  delay(1);
+  byte dat;  
+  signed char val;  
+  
+  curDat = 0;  
+  if(inputEc(ECA)) {  
+    curDat |= 2;  
+  }  
+  if(inputEc(ECB)) {  
+    curDat |= 1;  
+  }  
+  
+  if(befDat == curDat) {  
+    if(!inputMatch) {           //  既に一致しているときは 何もしない  
+      matchCnt++;  
+      if(matchCnt >= 5) {  
+        // 状態確定  
+        inputMatch = true;  
+        val = checkEnc(curDat);  
+        if(val != 0) {  
+          Count += val;  
+          Serial.println(Count);  
+        }  
+      }  
+    }  
+  } else {  
+    befDat = curDat;  
+    matchCnt = 0;  
+    inputMatch = false;  
+  }  
+  
+//  delay(1);
 }
