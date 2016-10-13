@@ -49,7 +49,7 @@ const int maxThrottle = 150 ;
 const float steeringScale = 0.3;
 const float steeringOffset = 0.5;
 const float electronicSpeedScale = 0.1;
-const float electronicSpeedOffset = 0.48;
+const float electronicSpeedOffset = 0.51;
 Servo steeringServo;
 Servo electronicSpeedController ;  // The ESC on the TRAXXAS works like a Servo
 
@@ -57,8 +57,11 @@ Servo electronicSpeedController ;  // The ESC on the TRAXXAS works like a Servo
 // For DEBUG
 std_msgs::Int32 str_msg;
 ros::Publisher chatter("chatter", &str_msg); 
+
+
 std_msgs::Int32 wheel_encode_count_msg;
 ros::Publisher wheel_encode_counter("wheel_encode_count", &wheel_encode_count_msg); 
+geometry_msgs::Twist targetTwistMsg;
 
 // Arduino 'map' funtion for floating point
 double fmap (double toMap, double in_min, double in_max, double out_min, double out_max) {
@@ -82,6 +85,7 @@ signed char checkEnc(byte dat) {
 
 void driveCallback ( const geometry_msgs::Twist&  twistMsg )
 {
+  targetTwistMsg = twistMsg;
   
   int steeringAngle = fmap(-1.0 * (twistMsg.angular.z * steeringScale) + steeringOffset, 0.0, 1.0, minSteering, maxSteering) ;
   // The following could be useful for debugging
@@ -122,6 +126,7 @@ void driveCallback ( const geometry_msgs::Twist&  twistMsg )
 ros::Subscriber<geometry_msgs::Twist> driveSubscriber("/cmd_vel", &driveCallback) ;
 
 void wec_publish () {
+   wheel_encode_count_msg.data = Count;
    wheel_encode_counter.publish( &wheel_encode_count_msg );
    Count = 0;
 }
@@ -133,6 +138,7 @@ void setup(){
   // ROS
   nodeHandle.initNode();
   nodeHandle.advertise(chatter);  // This can be useful for debugging purposes
+  nodeHandle.advertise(wheel_encode_counter);  // This can be useful for debugging purposes
   nodeHandle.subscribe(driveSubscriber) ;  // Subscribe to the steering and throttle messages
 
   // Wheel Encoder
@@ -145,7 +151,7 @@ void setup(){
   if(inputEc(ECB)) {  
     befDat |= 1;  
   }
-  MsTimer2::set(100, wec_publish); // publish wheel encode count
+  MsTimer2::set(200, wec_publish); // publish wheel encode count
   MsTimer2::start();
   
   // TRAXXAS Electronic Speed Controller (ESC)
@@ -155,6 +161,12 @@ void setup(){
   // Steering centered is 90, throttle at neutral is 90
   steeringServo.write(90) ;
   electronicSpeedController.write(90) ;
+  
+  // Controll
+  targetTwistMsg.angular.z = 0.0;
+  targetTwistMsg.liner.x = 0.0;
+  targetTwistMsg.liner.y = 0.0;
+  targetTwistMsg.liner.z = 0.0;
   
   delay(1000) ;
   
