@@ -10,6 +10,7 @@
   email : yukihiro.saito@tier4.jp
   MIT License
 */
+
 #if defined(ARDUINO) && ARDUINO >= 100
   #include "Arduino.h"
 #else
@@ -27,16 +28,14 @@
 #include <geometry_msgs/Twist.h>
 
 // Wcheel Encoder
-#define ECA 2   // D2   
-#define ECB 3   // D3 
-#define inputEc(x) digitalRead(x)   //  
-byte curDat;  
-byte befDat = 0;  
-byte rotDir = 0;  
-int Count = 0;  
-byte inputMatch;  
-byte matchCnt;    
-byte rotPat = 0;  
+// A相ピン割り当て
+#define ENC_A 2
+// B相ピン割り当て
+#define ENC_B 3
+// B相の前回値
+volatile int oldEncB; 
+// エンコーダ値
+volatile int encValue;
 
 // ROS
 ros::NodeHandle  nodeHandle;
@@ -49,7 +48,7 @@ const int maxThrottle = 150 ;
 const float steeringScale = 0.3;
 const float steeringOffset = 0.5;
 const float electronicSpeedScale = 0.1;
-const float electronicSpeedOffset = 0.51;
+const float electronicSpeedOffset = 0.52;
 Servo steeringServo;
 Servo electronicSpeedController ;  // The ESC on the TRAXXAS works like a Servo
 
@@ -68,20 +67,27 @@ double fmap (double toMap, double in_min, double in_max, double out_min, double 
   return (toMap - in_min) * (out_max - out_min) / (in_max - in_min) + out_min;
 }
 
-signed char checkEnc(byte dat) {  
-  byte pat,i,j;  
-  
-  rotPat <<= 2;  
-  rotPat |= (dat & 0x03);  
-  
-  if(rotPat == 0x4B) {        // +パターン  
-    return 1;  
-  } else if(rotPat == 0x87) {     // -パターン  
-    return -1;  
-  } else {  
-    return 0;  
-  }  
-}  
+
+ 
+void doEncoderCounter(void){
+  int newEncB = digitalRead(ENC_B);
+  int newEncA = digitalRead(ENC_A);
+   
+  if (newEncA){
+    if (oldEncB && !newEncB) { // up
+      encValue++;
+    } else { // down
+      encValue--;
+    }
+  } else {
+    if (oldEncB && !newEncB) { // down
+      encValue--;
+    } else { // up
+      encValue++;
+    }
+  }
+  oldEncB = newEncB;
+}
 
 void driveCallback ( const geometry_msgs::Twist&  twistMsg )
 {
@@ -115,9 +121,10 @@ void driveCallback ( const geometry_msgs::Twist&  twistMsg )
     escCommand = maxThrottle ;
   }
   // The following could be useful for debugging
-  // str_msg.data= escCommand ;
-  // chatter.publish(&str_msg);
-  
+  str_msg.data= escCommand ;
+//  chatter.publish(&str_msg);
+  if (87 <= escCommand && escCommand <= 97)
+    escCommand = 93;
   electronicSpeedController.write(escCommand) ;
   digitalWrite(13, HIGH-digitalRead(13));  //toggle led  
  
@@ -126,9 +133,9 @@ void driveCallback ( const geometry_msgs::Twist&  twistMsg )
 ros::Subscriber<geometry_msgs::Twist> driveSubscriber("/cmd_vel", &driveCallback) ;
 
 void wec_publish () {
-   wheel_encode_count_msg.data = Count;
+   wheel_encode_count_msg.data = encValue;
    wheel_encode_counter.publish( &wheel_encode_count_msg );
-   Count = 0;
+   encValue = 0;
 }
 
 void setup(){
@@ -142,16 +149,12 @@ void setup(){
   nodeHandle.subscribe(driveSubscriber) ;  // Subscribe to the steering and throttle messages
 
   // Wheel Encoder
-  pinMode(ECA, INPUT);  
-  pinMode(ECB, INPUT);  
-  curDat = 0;  
-  if(inputEc(ECA)) {  
-    befDat |= 2;  
-  }  
-  if(inputEc(ECB)) {  
-    befDat |= 1;  
-  }
-  MsTimer2::set(200, wec_publish); // publish wheel encode count
+  pinMode(ENC_A, INPUT);
+  pinMode(ENC_B, INPUT);
+  encValue = 0;
+  oldEncB = digitalRead(ENC_B);
+  attachInterrupt(0, doEncoderCounter, CHANGE);
+  MsTimer2::set(100, wec_publish); // publish wheel encode count
   MsTimer2::start();
   
   // TRAXXAS Electronic Speed Controller (ESC)
@@ -164,45 +167,16 @@ void setup(){
   
   // Controll
   targetTwistMsg.angular.z = 0.0;
-  targetTwistMsg.liner.x = 0.0;
-  targetTwistMsg.liner.y = 0.0;
-  targetTwistMsg.liner.z = 0.0;
-  
+  targetTwistMsg.linear.x = 0.0;
+  targetTwistMsg.linear.y = 0.0;
+  targetTwistMsg.linear.z = 0.0;
   delay(1000) ;
   
 }
 
 void loop(){
   nodeHandle.spinOnce();
-  byte dat;  
-  signed char val;  
-  
-  curDat = 0;  
-  if(inputEc(ECA)) {  
-    curDat |= 2;  
-  }  
-  if(inputEc(ECB)) {  
-    curDat |= 1;  
-  }  
-  
-  if(befDat == curDat) {  
-    if(!inputMatch) {           //  既に一致しているときは 何もしない  
-      matchCnt++;  
-      if(matchCnt >= 5) {  
-        // 状態確定  
-        inputMatch = true;  
-        val = checkEnc(curDat);  
-        if(val != 0) {  
-          Count += val;  
-          Serial.println(Count);  
-        }  
-      }  
-    }  
-  } else {  
-    befDat = curDat;  
-    matchCnt = 0;  
-    inputMatch = false;  
-  }  
-  
-//  delay(1);
+  delay(1);
 }
+
+
